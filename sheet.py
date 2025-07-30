@@ -32,7 +32,7 @@ scope = [
 
 # Load credentials from environment
 creds_dict = json.loads(os.getenv("GOOGLE_CREDS_JSON"))
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
 # Initialize services with error handling
