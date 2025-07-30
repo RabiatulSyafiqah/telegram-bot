@@ -2,3 +2,4 @@ python-telegram-bot==22.3
 python-dotenv==1.1.1
 gspread==6.2.1
 flask==2.1.0  # Only if you use `keep_alive.py` with Flask
+Werkzeug==2.0.3  # Required by Flask 2.1.0 to avoid 'url_quote' error
