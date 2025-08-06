@@ -3,6 +3,7 @@ from flask import Flask, request
 from dotenv import load_dotenv
 import os
 import logging
+from queue import Queue
 
 from telegram import Bot, Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -20,20 +21,25 @@ from sheet import (
     sheet
 )
 
+# Load environment variables
 load_dotenv()
 
+# Telegram bot setup
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 bot = Bot(token=TOKEN)
 app = Flask(__name__)
-dispatcher = Dispatcher(bot, None, workers=0)
+
+# Dispatcher setup for python-telegram-bot v13.15
+update_queue = Queue()
+dispatcher = Dispatcher(bot, update_queue, workers=0, use_context=True)
 
 # Conversation states
 CHOOSING_OFFICER, GET_NAME, GET_PHONE, GET_EMAIL, GET_PURPOSE, GET_DATE, GET_TIME = range(7)
 
-# Handlers
+# === Handlers ===
 def start(update: Update, context: CallbackContext):
     update.message.reply_text(
-        "Selamat datang ke Sistem Temu Janji Pejabat Daerah Keningau! \U0001F3DB\uFE0F\n"
+        "Selamat datang ke Sistem Temu Janji Pejabat Daerah Keningau! 🏛️\n"
         "Taip /book untuk menempah janji temu."
     )
 
@@ -83,27 +89,21 @@ def get_date(update: Update, context: CallbackContext):
     date = update.message.text.strip()
 
     if not is_valid_date(date):
-        update.message.reply_text(
-            "\u26A0\uFE0F Tarikh yang dimasukkan tidak sah!\n"
-            "Sila masukkan tarikh akan datang (DD/MM/YYYY)."
-        )
+        update.message.reply_text("⚠️ Tarikh tidak sah! Sila masukkan tarikh akan datang (DD/MM/YYYY).")
         return GET_DATE
 
     if is_weekend(date):
-        update.message.reply_text(
-            "\u26D4 Tempahan tidak boleh dibuat pada hujung minggu.\n"
-            "Sila pilih tarikh bekerja (Isnin-Jumaat):"
-        )
+        update.message.reply_text("⛔ Tempahan tidak boleh dibuat pada hujung minggu. Sila pilih tarikh bekerja.")
         return GET_DATE
 
     available_slots = get_available_slots(date)
     if not available_slots:
-        update.message.reply_text("\u26D4 Tiada slot tersedia pada tarikh ini. Sila cuba tarikh lain:")
+        update.message.reply_text("⛔ Tiada slot tersedia pada tarikh ini. Sila cuba tarikh lain:")
         return GET_DATE
 
     context.user_data.update({"date": date, "available_slots": available_slots})
     keyboard = [[slot] for slot in available_slots]
-    update.message.reply_text("\u231A Sila pilih masa temu janji:", reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True))
+    update.message.reply_text("⏰ Sila pilih masa temu janji:", reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True))
     return GET_TIME
 
 def get_time(update: Update, context: CallbackContext):
@@ -114,30 +114,26 @@ def get_time(update: Update, context: CallbackContext):
         date = data["date"]
         officer = data["officer"]
     except KeyError:
-        update.message.reply_text("\u26A0\uFE0F Sesi dibatalkan. Sila cuba lagi dengan menaip /book", reply_markup=ReplyKeyboardRemove())
+        update.message.reply_text("⚠️ Sesi dibatalkan. Sila cuba lagi dengan /book", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
-    if not is_slot_available(date, chosen_time, officer):
-        records = sheet.get_all_records()
-        booked_slots = [row['Time'] for row in records if row['Date'] == date and row['Officer'] == officer]
-        alternatives = [slot for slot in available_slots if slot not in booked_slots]
+    if chosen_time not in available_slots:
+        update.message.reply_text("⛔ Masa tidak sah. Sila pilih masa dari senarai yang diberikan.")
+        return GET_TIME
 
-        if alternatives:
-            update.message.reply_text(f"\u26D4 Slot {chosen_time} sudah penuh. Pilih masa lain:", reply_markup=ReplyKeyboardMarkup([[slot] for slot in alternatives], one_time_keyboard=True))
-            return GET_TIME
-        else:
-            update.message.reply_text("\u26D4 Semua slot sudah penuh. Sila cuba tarikh lain dengan /book", reply_markup=ReplyKeyboardRemove())
-            return ConversationHandler.END
+    if not is_slot_available(date, chosen_time, officer):
+        update.message.reply_text("⛔ Slot ini telah ditempah. Sila pilih masa lain.", reply_markup=ReplyKeyboardMarkup([[slot] for slot in available_slots if is_slot_available(date, slot, officer)], one_time_keyboard=True))
+        return GET_TIME
 
     save_booking(update.message.from_user.id, data["name"], data["phone"], data["email"], officer, data["purpose"], date, chosen_time)
-    update.message.reply_text(f"\u2705 Tempahan berjaya!\nTarikh: {date}\nMasa: {chosen_time}\nPegawai: {officer}", reply_markup=ReplyKeyboardRemove())
+    update.message.reply_text(f"✅ Tempahan berjaya!\nTarikh: {date}\nMasa: {chosen_time}\nPegawai: {officer}", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 def cancel(update: Update, context: CallbackContext):
     update.message.reply_text("Tempahan dibatalkan.")
     return ConversationHandler.END
 
-# Register handlers
+# === Register handlers ===
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler("book", book)],
     states={
@@ -152,7 +148,6 @@ conv_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel)]
 )
 
-# === Add handlers to dispatcher ===
 dispatcher.add_handler(CommandHandler("start", start))
 dispatcher.add_handler(conv_handler)
 
@@ -167,5 +162,6 @@ def webhook():
 def index():
     return "Bot is live!", 200
 
+# === Run the app ===
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
